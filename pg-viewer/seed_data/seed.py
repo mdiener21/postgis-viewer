@@ -2,8 +2,10 @@ import asyncio
 import os
 import asyncpg
 
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
 async def seed():
-    conn = await asyncpg.connect("postgresql://postgres:password@db:5432/postgis_db")
+    conn = await asyncpg.connect(f"postgresql://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASS')}@{os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}")
     
     try:
         await conn.execute("CREATE EXTENSION IF NOT EXISTS postgis;")

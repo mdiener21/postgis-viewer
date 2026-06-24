@@ -1,11 +1,11 @@
-FROM node:20-slim AS frontend-builder
+FROM node:24-slim AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm install
 COPY frontend/ .
 RUN npm run build
 
-FROM python:3.11-slim
+FROM python:3.14-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y libpq-dev gcc && rm -rf /var/lib/apt/lists/*
 COPY backend/requirements.txt .
