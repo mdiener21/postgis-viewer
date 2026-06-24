@@ -16,6 +16,7 @@ const props = defineProps({
 
 const mapContainer = ref(null)
 let map = null
+const mapReady = ref(false)
 
 onMounted(() => {
   map = new maplibregl.Map({
@@ -36,16 +37,24 @@ onMounted(() => {
   })
 
   map.on('load', () => {
+    mapReady.value = true
     updateMapData()
   })
 })
 
-watch(() => props.geojson, () => {
-  updateMapData()
-}, { deep: true })
+// Redraw whenever the data arrives OR the map finishes loading, whichever is
+// last. `immediate` covers the case where MapViewer mounts with geojson already
+// set, and watching mapReady covers data that arrives before the style loads.
+watch(
+  [() => props.geojson, mapReady],
+  () => {
+    updateMapData()
+  },
+  { deep: true, immediate: true }
+)
 
 function updateMapData() {
-  if (!map || !map.isStyleLoaded()) return
+  if (!map || !mapReady.value) return
 
   // Background map logic
   if (props.srid === 4326) {
@@ -56,11 +65,13 @@ function updateMapData() {
         tileSize: 256,
         attribution: '&copy; OpenStreetMap contributors'
       })
+      // Insert above the opaque background (and below any data layers added
+      // afterwards) so the basemap is actually visible.
       map.addLayer({
         id: 'osm-layer',
         type: 'raster',
         source: 'osm'
-      }, 'background') // Just above background
+      })
     }
   } else {
     if (map.getLayer('osm-layer')) map.removeLayer('osm-layer')

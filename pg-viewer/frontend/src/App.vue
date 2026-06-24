@@ -166,7 +166,7 @@ async function showOnMap() {
           </Table>
         </div>
         
-        <div v-if="viewMode === 'map'" class="h-full w-full">
+        <div v-if="viewMode === 'map'" class="absolute inset-0">
           <MapViewer :geojson="mapData" :srid="mapData?.srid" />
           <div class="absolute top-4 right-4 z-10">
              <Badge variant="outline" class="bg-white shadow-sm backdrop-blur-sm">

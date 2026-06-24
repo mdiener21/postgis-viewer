@@ -2,10 +2,21 @@ import asyncio
 import os
 import asyncpg
 
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
+def get_dsn():
+    """Build an asyncpg DSN from DATABASE_URL, falling back to POSTGRES_* vars."""
+    url = os.getenv("DATABASE_URL")
+    if url:
+        # asyncpg doesn't understand the SQLAlchemy "+asyncpg" driver suffix.
+        return url.replace("postgresql+asyncpg://", "postgresql://")
+    return (
+        f"postgresql://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASS')}"
+        f"@{os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}"
+    )
+
 
 async def seed():
-    conn = await asyncpg.connect(f"postgresql://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASS')}@{os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}")
+    conn = await asyncpg.connect(get_dsn())
     
     try:
         await conn.execute("CREATE EXTENSION IF NOT EXISTS postgis;")

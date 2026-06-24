@@ -13,6 +13,45 @@ app = FastAPI()
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:password@db:5432/postgis_db")
 engine = create_async_engine(DATABASE_URL)
 
+async def detect_geometry_columns(conn, clean_sql, columns):
+    """Return {column_name: srid} for every geometry/geography column in the query.
+
+    Detection is type-based (pg_typeof) rather than error-driven, so it reliably
+    finds geometry columns no matter what other (non-spatial) columns are present
+    in the result set. Each probe runs in a SAVEPOINT so a failure on one column
+    never aborts the surrounding transaction.
+    """
+    geometry_info = {}
+    for col in columns:
+        try:
+            async with conn.begin_nested():
+                type_query = f'SELECT pg_typeof("{col}")::text FROM ({clean_sql}) AS sub LIMIT 1'
+                type_result = await conn.execute(text(type_query))
+                type_row = type_result.fetchone()
+        except Exception:
+            continue
+
+        # pg_typeof may return a schema-qualified name (e.g. "public.geometry").
+        col_type = type_row[0].split(".")[-1] if type_row and type_row[0] else None
+        if col_type not in ("geometry", "geography"):
+            continue
+
+        srid = 0
+        try:
+            async with conn.begin_nested():
+                srid_query = f'SELECT ST_SRID("{col}") FROM ({clean_sql}) AS sub WHERE "{col}" IS NOT NULL LIMIT 1'
+                srid_result = await conn.execute(text(srid_query))
+                srid_row = srid_result.fetchone()
+                if srid_row is not None and srid_row[0] is not None:
+                    srid = srid_row[0]
+        except Exception:
+            pass
+
+        geometry_info[col] = srid
+
+    return geometry_info
+
+
 class QueryRequest(BaseModel):
     sql: str
     page: int = 1
@@ -55,19 +94,8 @@ async def execute_query(request: QueryRequest):
                     processed_row[col] = str(val) if val is not None else None
                 rows.append(processed_row)
 
-            # Detect geometry columns and their SRIDs
-            # We can use a trick: SELECT ST_SRID(col) FROM (user_query) LIMIT 1
-            geometry_info = {}
-            for col in columns:
-                try:
-                    srid_query = f"SELECT ST_SRID(\"{col}\") FROM ({clean_sql}) AS sub WHERE \"{col}\" IS NOT NULL LIMIT 1"
-                    srid_result = await conn.execute(text(srid_query))
-                    srid_row = srid_result.fetchone()
-                    if srid_row is not None:
-                        geometry_info[col] = srid_row[0]
-                except Exception:
-                    # Not a geometry column or other error
-                    pass
+            # Detect geometry columns and their SRIDs (type-based, order-independent)
+            geometry_info = await detect_geometry_columns(conn, clean_sql, columns)
 
             return {
                 "columns": columns,
@@ -96,19 +124,9 @@ async def get_map_data(request: MapRequest):
             temp_res = await conn.execute(text(f"SELECT * FROM ({clean_sql}) AS sub LIMIT 0"))
             columns = list(temp_res.keys())
             
-            geom_col = None
-            srid = 0
-            for col in columns:
-                try:
-                    srid_query = f"SELECT ST_SRID(\"{col}\") FROM ({clean_sql}) AS sub WHERE \"{col}\" IS NOT NULL LIMIT 1"
-                    srid_result = await conn.execute(text(srid_query))
-                    srid_row = srid_result.fetchone()
-                    if srid_row is not None:
-                        geom_col = col
-                        srid = srid_row[0]
-                        break # Just pick the first geom column for now
-                except:
-                    continue
+            geometry_info = await detect_geometry_columns(conn, clean_sql, columns)
+            geom_col = next(iter(geometry_info), None)  # pick the first geom column
+            srid = geometry_info.get(geom_col, 0) if geom_col else 0
             
             if not geom_col:
                 return {"type": "FeatureCollection", "features": [], "srid": 0}
