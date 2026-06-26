@@ -11,6 +11,14 @@ const props = defineProps({
   srid: {
     type: Number,
     default: 0
+  },
+  queryId: {
+    type: String,
+    default: null
+  },
+  bbox: {
+    type: Array,
+    default: null
   }
 })
 
@@ -43,10 +51,10 @@ onMounted(() => {
 })
 
 // Redraw whenever the data arrives OR the map finishes loading, whichever is
-// last. `immediate` covers the case where MapViewer mounts with geojson already
+// last. `immediate` covers the case where MapViewer mounts with props already
 // set, and watching mapReady covers data that arrives before the style loads.
 watch(
-  [() => props.geojson, mapReady],
+  [() => props.geojson, () => props.queryId, mapReady],
   () => {
     updateMapData()
   },
@@ -56,8 +64,11 @@ watch(
 function updateMapData() {
   if (!map || !mapReady.value) return
 
-  // Background map logic
-  if (props.srid === 4326) {
+  // Background map logic (PostGIS viewer usually assumes 4326 for display if it can)
+  // We'll show OSM if SRID is 4326 or if we're using vector tiles (which are transformed to 3857)
+  const shouldShowOSM = props.srid === 4326 || props.queryId;
+
+  if (shouldShowOSM) {
     if (!map.getSource('osm')) {
       map.addSource('osm', {
         type: 'raster',
@@ -65,65 +76,126 @@ function updateMapData() {
         tileSize: 256,
         attribution: '&copy; OpenStreetMap contributors'
       })
-      // Insert above the opaque background (and below any data layers added
-      // afterwards) so the basemap is actually visible.
       map.addLayer({
         id: 'osm-layer',
         type: 'raster',
         source: 'osm'
-      })
+      }, 'background') // Add above background but below data
     }
   } else {
     if (map.getLayer('osm-layer')) map.removeLayer('osm-layer')
     if (map.getSource('osm')) map.removeSource('osm')
   }
 
-  // Geometry data
-  if (props.geojson && props.geojson.features && props.geojson.features.length > 0) {
-    if (map.getSource('data')) {
-      map.getSource('data').setData(props.geojson)
-    } else {
-      map.addSource('data', {
-        type: 'geojson',
-        data: props.geojson
-      })
+  // Clear existing data layers/sources if they exist and we're switching modes
+  const removeData = () => {
+    ['data-fill', 'data-line', 'data-circle'].forEach(id => {
+      if (map.getLayer(id)) map.removeLayer(id)
+    })
+    if (map.getSource('data')) map.removeSource('data')
+  }
 
-      map.addLayer({
-        id: 'data-fill',
-        type: 'fill',
-        source: 'data',
-        filter: ['==', '$type', 'Polygon'],
-        paint: {
-          'fill-color': '#3b82f6',
-          'fill-opacity': 0.5,
-          'fill-outline-color': '#1d4ed8'
-        }
-      })
+  // Vector Tile Data
+  if (props.queryId) {
+    removeData()
+    map.addSource('data', {
+      type: 'vector',
+      tiles: [`${window.location.origin}/api/tiles/${props.queryId}/{z}/{x}/{y}`],
+      minzoom: 0,
+      maxzoom: 22
+    })
 
-      map.addLayer({
-        id: 'data-line',
-        type: 'line',
-        source: 'data',
-        filter: ['==', '$type', 'LineString'],
-        paint: {
-          'line-color': '#3b82f6',
-          'line-width': 2
-        }
-      })
+    map.addLayer({
+      id: 'data-fill',
+      type: 'fill',
+      source: 'data',
+      'source-layer': 'default',
+      filter: ['==', '$type', 'Polygon'],
+      paint: {
+        'fill-color': '#3b82f6',
+        'fill-opacity': 0.5,
+        'fill-outline-color': '#1d4ed8'
+      }
+    })
 
-      map.addLayer({
-        id: 'data-circle',
-        type: 'circle',
-        source: 'data',
-        filter: ['==', '$type', 'Point'],
-        paint: {
-          'circle-radius': 6,
-          'circle-color': '#3b82f6',
-          'circle-stroke-width': 2,
-          'circle-stroke-color': '#ffffff'
-        }
-      })
+    map.addLayer({
+      id: 'data-line',
+      type: 'line',
+      source: 'data',
+      'source-layer': 'default',
+      filter: ['==', '$type', 'LineString'],
+      paint: {
+        'line-color': '#3b82f6',
+        'line-width': 2
+      }
+    })
+
+    map.addLayer({
+      id: 'data-circle',
+      type: 'circle',
+      source: 'data',
+      'source-layer': 'default',
+      filter: ['==', '$type', 'Point'],
+      paint: {
+        'circle-radius': 6,
+        'circle-color': '#3b82f6',
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff'
+      }
+    })
+
+    if (props.bbox) {
+        map.fitBounds(props.bbox, { padding: 50, maxZoom: 15 })
     }
+
+    // Use a single click listener on the map and check for features
+    // instead of adding multiple listeners that accumulate
+    map.off('click', handleLayerClick)
+    map.on('click', handleLayerClick)
+  }
+  // GeoJSON data (fallback or legacy)
+  else if (props.geojson && props.geojson.features && props.geojson.features.length > 0) {
+    removeData()
+    map.addSource('data', {
+      type: 'geojson',
+      data: props.geojson
+    })
+
+    map.addLayer({
+      id: 'data-fill',
+      type: 'fill',
+      source: 'data',
+      filter: ['==', '$type', 'Polygon'],
+      paint: {
+        'fill-color': '#3b82f6',
+        'fill-opacity': 0.5,
+        'fill-outline-color': '#1d4ed8'
+      }
+    })
+
+    map.addLayer({
+      id: 'data-line',
+      type: 'line',
+      source: 'data',
+      filter: ['==', '$type', 'LineString'],
+      paint: {
+        'line-color': '#3b82f6',
+        'line-width': 2
+      }
+    })
+
+    map.addLayer({
+      id: 'data-circle',
+      type: 'circle',
+      source: 'data',
+      filter: ['==', '$type', 'Point'],
+      paint: {
+        'circle-radius': 6,
+        'circle-color': '#3b82f6',
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff'
+      }
+    })
 
     // Fit bounds
     const bounds = new maplibregl.LngLatBounds()
@@ -146,14 +218,34 @@ function updateMapData() {
         map.fitBounds(bounds, { padding: 50, maxZoom: 15 })
     }
 
-    // Popup on click
     map.on('click', 'data-fill', handleEvent)
     map.on('click', 'data-line', handleEvent)
     map.on('click', 'data-circle', handleEvent)
   }
 }
 
+function handleLayerClick(e) {
+  const features = map.queryRenderedFeatures(e.point, {
+    layers: ['data-fill', 'data-line', 'data-circle']
+  })
+
+  if (!features.length) return
+
+  const properties = features[0].properties
+  let content = '<div class="p-2 font-sans text-xs max-h-40 overflow-y-auto"><table class="w-full">'
+  for (const [key, value] of Object.entries(properties)) {
+    content += `<tr><td class="font-bold pr-2">${key}:</td><td>${value}</td></tr>`
+  }
+  content += '</table></div>'
+
+  new maplibregl.Popup()
+    .setLngLat(e.lngLat)
+    .setHTML(content)
+    .addTo(map)
+}
+
 function handleEvent(e) {
+  // Legacy handler for GeoJSON mode
   const properties = e.features[0].properties
   let content = '<div class="p-2 font-sans text-xs max-h-40 overflow-y-auto"><table class="w-full">'
   for (const [key, value] of Object.entries(properties)) {

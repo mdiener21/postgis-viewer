@@ -167,7 +167,12 @@ async function showOnMap() {
         </div>
         
         <div v-if="viewMode === 'map'" class="absolute inset-0">
-          <MapViewer :geojson="mapData" :srid="mapData?.srid" />
+          <MapViewer
+            :geojson="mapData"
+            :srid="mapData?.srid"
+            :query-id="mapData?.query_id"
+            :bbox="mapData?.bbox"
+          />
           <div class="absolute top-4 right-4 z-10">
              <Badge variant="outline" class="bg-white shadow-sm backdrop-blur-sm">
                 SRID: {{ mapData?.srid }}
