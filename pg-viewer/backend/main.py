@@ -61,8 +61,8 @@ async def detect_geometry_columns(conn, clean_sql, columns):
             continue
 
         # pg_typeof may return a schema-qualified name (e.g. "public.geometry").
-        col_type = type_row[0].split(".")[-1] if type_row and type_row[0] else None
-        if col_type not in ("geometry", "geography"):
+        col_type = type_row[0].lower() if type_row and type_row[0] else ""
+        if "geometry" not in col_type and "geography" not in col_type:
             continue
 
         srid = 0
@@ -207,9 +207,9 @@ async def get_tile(query_id: str, z: int, x: int, y: int):
             # We use ST_AsMVTGeom to transform and clip the geometry to the tile boundary.
             # ST_TileEnvelope(z, x, y) generates the tile boundary in SRID 3857.
 
-            # Handle SRID 0: if SRID is 0, we can try ST_SetSRID before ST_Transform
-            # or just skip ST_Transform if the user data is already 3857 (unlikely).
-            # Most common case for SRID 0 is data that is actually 4326.
+            # Handle SRID 0: if SRID is 0, we assume 4326 as a fallback.
+            # We use the spatial index if possible by transforming the envelope to the data SRID.
+            target_srid = srid if srid > 0 else 4326
             geom_expr = f'"{geom_col}"'
             if srid == 0:
                 geom_expr = f'ST_SetSRID("{geom_col}", 4326)'
@@ -230,20 +230,20 @@ async def get_tile(query_id: str, z: int, x: int, y: int):
                         ST_Transform({geom_expr}, 3857),
                         bounds.geom,
                         4096, 256, true
-                    ) AS geom,
+                    ) AS mvt_geom,
                     inputs.*
                   FROM ({sql}) AS inputs, bounds
-                  WHERE ST_Intersects(ST_Transform({geom_expr}, 3857), bounds.geom)
+                  WHERE ST_Intersects({geom_expr}, ST_Transform(bounds.geom, {target_srid}))
                 )
                 SELECT ST_AsMVT(t, 'default') FROM (
-                    SELECT geom {columns_part}
+                    SELECT mvt_geom AS geom {columns_part}
                     FROM mvtgeom
                 ) AS t;
             """
             
             result = await conn.execute(text(mvt_query), {"z": z, "x": x, "y": y})
             row = result.fetchone()
-            tile_content = row[0] if row else b""
+            tile_content = row[0] if row and row[0] is not None else b""
             
             return Response(content=tile_content, media_type="application/x-protobuf")
         except Exception as e:
