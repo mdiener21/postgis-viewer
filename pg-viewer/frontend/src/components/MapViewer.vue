@@ -64,8 +64,7 @@ watch(
 function updateMapData() {
   if (!map || !mapReady.value) return
 
-  // Background map logic (PostGIS viewer usually assumes 4326 for display if it can)
-  // We'll show OSM if SRID is 4326 or if we're using vector tiles (which are transformed to 3857)
+  // Background map logic
   const shouldShowOSM = props.srid === 4326 || props.queryId;
 
   if (shouldShowOSM) {
@@ -76,15 +75,22 @@ function updateMapData() {
         tileSize: 256,
         attribution: '&copy; OpenStreetMap contributors'
       })
+      // Add it without beforeId so it's on top of the background layer.
+      // Data layers added later will be on top of this.
       map.addLayer({
         id: 'osm-layer',
         type: 'raster',
         source: 'osm'
-      }, 'background') // Add above background but below data
+      })
+    }
+    // Ensure it's visible if it was hidden/removed
+    if (map.getLayer('osm-layer')) {
+        map.setLayoutProperty('osm-layer', 'visibility', 'visible')
     }
   } else {
-    if (map.getLayer('osm-layer')) map.removeLayer('osm-layer')
-    if (map.getSource('osm')) map.removeSource('osm')
+    if (map.getLayer('osm-layer')) {
+        map.setLayoutProperty('osm-layer', 'visibility', 'none')
+    }
   }
 
   // Clear existing data layers/sources if they exist and we're switching modes
@@ -218,9 +224,8 @@ function updateMapData() {
         map.fitBounds(bounds, { padding: 50, maxZoom: 15 })
     }
 
-    map.on('click', 'data-fill', handleEvent)
-    map.on('click', 'data-line', handleEvent)
-    map.on('click', 'data-circle', handleEvent)
+    map.off('click', handleLayerClick)
+    map.on('click', handleLayerClick)
   }
 }
 
